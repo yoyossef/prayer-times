@@ -27,9 +27,11 @@ prayers_ar=(
   ["Isha"]="العشاء"
 )
 date=(
+  [day]=$(date +%-d)
   [day_idx]=$(($(date +%-d) - 1))
   [weekday]=$(date +%a)
   [month]=$(date +%-m)
+  [month_idx]=$(($(date +%-m) - 1))
   [year]=$(date +%Y)
 )
 
@@ -65,12 +67,24 @@ fetch_mawaqit_prayers() {
     return 1
   fi
 
+  # Saving current Gregorian year in the JSON as Mawaqit does not provide it
+  conf_data=$(echo "$conf_data" | jq --arg year "${date[year]}" '. + {year: $year}')
   echo "$conf_data" > "$prayers_json"
 }
 
 check() {
   if [[ -n "$mawaqit_masjid_id" ]]; then
-    fetch_mawaqit_prayers "$mawaqit_masjid_id"
+    local available_year
+    if [[ -r $prayers_json ]]; then
+      available_year=$(jq -r ".year" "$prayers_json")
+    else
+      local fetch_prayers=1
+    fi
+
+    if [[ "$fetch_prayers" || "$available_year" != "${date[year]}" ]]; then
+      echo "-- Fetching current year prayer calendar (${date[year]})"
+      fetch_mawaqit_prayers "$mawaqit_masjid_id"
+    fi
   else
     local available_month
     if [[ -r $prayers_json ]]; then
@@ -115,12 +129,12 @@ timeof() {
     local prayer_time
 
     case "$timing_key" in
-      Fajr) prayer_time=$(jq -r ".times[0]" "$prayers_json") ;;
-      Sunrise) prayer_time=$(jq -r ".shuruq" "$prayers_json") ;;
-      Dhuhr) prayer_time=$(jq -r ".times[1]" "$prayers_json") ;;
-      Asr) prayer_time=$(jq -r ".times[2]" "$prayers_json") ;;
-      Maghrib) prayer_time=$(jq -r ".times[3]" "$prayers_json") ;;
-      Isha) prayer_time=$(jq -r ".times[4]" "$prayers_json") ;;
+      Fajr) prayer_time=$(jq -r ".calendar[${date[month_idx]}].\"${date[day]}\"[0]" "$prayers_json") ;;
+      Sunrise) prayer_time=$(jq -r ".calendar[${date[month_idx]}].\"${date[day]}\"[1]" "$prayers_json") ;;
+      Dhuhr) prayer_time=$(jq -r ".calendar[${date[month_idx]}].\"${date[day]}\"[2]" "$prayers_json") ;;
+      Asr) prayer_time=$(jq -r ".calendar[${date[month_idx]}].\"${date[day]}\"[3]" "$prayers_json") ;;
+      Maghrib) prayer_time=$(jq -r ".calendar[${date[month_idx]}].\"${date[day]}\"[4]" "$prayers_json") ;;
+      Isha) prayer_time=$(jq -r ".calendar[${date[month_idx]}].\"${date[day]}\"[5]" "$prayers_json") ;;
       *) echo "Invalid prayer time requested: $timing_key" && return 1 ;;
     esac
 
