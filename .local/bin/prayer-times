@@ -7,9 +7,9 @@ long='31.290419'
 # Calculation Method: https://api.aladhan.com/v1/methods
 method='5'
 # Print Text Language (en/ar)
-print_lang="ar"
+print_lang='ar'
 # Notifcation Daemon
-notify="dunst"
+notify='dunst'
 # ----------------------- #
 prayers_json="$HOME/.local/share/prayers.json"
 prayers=("Fajr" "Dhuhr" "Asr" "Maghrib" "Isha")
