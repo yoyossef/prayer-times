@@ -1,6 +1,8 @@
 #!/bin/bash
 
 # ----- Parameters ------ #
+# Mawaqit masjid id: https://mawaqit.com
+mawaqit_masjid_id=''
 # Coordinates: https://www.mapcoordinates.net/en
 lat='30.001780'
 long='31.290419'
@@ -40,18 +42,48 @@ nameof() {
   fi
 }
 
-check() {
-  local available_month
-  if [[ -r $prayers_json ]]; then
-    available_month=$(jq -r ".data[0].date.gregorian.month.number" "$prayers_json")
-  else
-    local fetch_prayers=1
+# Helper function to fetch prayer times from Mawaqit
+fetch_mawaqit_prayers() {
+  local masjid_id="$1"
+  local url="https://mawaqit.net/fr/${masjid_id}"
+
+  echo "-- Fetching prayer times from Mawaqit for mosque ID: $masjid_id"
+
+  local page_content
+  page_content=$(curl -s "$url")
+
+  if [[ -z "$page_content" ]]; then
+    echo "Error: Unable to fetch data for mosque ID $masjid_id"
+    return 1
   fi
 
-  if [[ "$fetch_prayers" || "$available_month" != "${date[month]}" ]]; then
-    echo "-- fetching current month prayer calendar (${date[month]}-${date[year]})"
-    # Documentation: https://aladhan.com/prayer-times-api#GetCalendar
-    curl -Lso "$prayers_json" "https://api.aladhan.com/v1/calendar/${date[year]}/${date[month]}?latitude=$lat&longitude=$long&method=$method"
+  local conf_data
+  conf_data=$(echo "$page_content" | grep -oP 'var confData = \K.*?(?=;)' | sed 's/;$//')
+
+  if [[ -z "$conf_data" ]]; then
+    echo "Error: Unable to find prayer times data in the response."
+    return 1
+  fi
+
+  echo "$conf_data" > "$prayers_json"
+}
+
+check() {
+  if [[ -n "$mawaqit_masjid_id" ]]; then
+    fetch_mawaqit_prayers "$mawaqit_masjid_id"
+  else
+    local available_month
+    if [[ -r $prayers_json ]]; then
+      available_month=$(jq -r ".data[0].date.gregorian.month.number" "$prayers_json")
+    else
+      local fetch_prayers=1
+    fi
+
+    if [[ "$fetch_prayers" || "$available_month" != "${date[month]}" ]]; then
+      echo "-- Fetching current month prayer calendar (${date[month]}-${date[year]})"
+      # Documentation: https://aladhan.com/prayer-times-api#GetCalendar
+      curl -Lso "$prayers_json" "https://api.aladhan.com/v1/calendar/${date[year]}/${date[month]}?latitude=$lat&longitude=$long&method=$method"
+    fi
   fi
 }
 
@@ -75,8 +107,34 @@ add-jobs() {
 }
 
 timeof() {
-  [[ "$#" -lt "1" ]] && echo "atleast 1 argument is needed" && return 1
-  echo -n "$(date -d "$(jq -r ".data[${date[day_idx]}].timings.$1" "$prayers_json")" "+${2:-%I:%M}")"
+  [[ "$#" -lt "1" ]] && echo "at least 1 argument is needed" && return 1
+
+  if [[ -n "$mawaqit_masjid_id" ]]; then
+    # For Mawaqit data
+    local timing_key="$1"
+    local prayer_time
+
+    case "$timing_key" in
+      Fajr) prayer_time=$(jq -r ".times[0]" "$prayers_json") ;;
+      Sunrise) prayer_time=$(jq -r ".shuruq" "$prayers_json") ;;
+      Dhuhr) prayer_time=$(jq -r ".times[1]" "$prayers_json") ;;
+      Asr) prayer_time=$(jq -r ".times[2]" "$prayers_json") ;;
+      Maghrib) prayer_time=$(jq -r ".times[3]" "$prayers_json") ;;
+      Isha) prayer_time=$(jq -r ".times[4]" "$prayers_json") ;;
+      *) echo "Invalid prayer time requested: $timing_key" && return 1 ;;
+    esac
+
+    # Convert to seconds if requested
+    if [[ "$2" == "%s" ]]; then
+      echo -n "$(date -d "$(date +%Y-%m-%d) $prayer_time" +%s)"
+    else
+      echo "$prayer_time"
+    fi
+
+  else
+    # For Aladhan API data
+    echo -n "$(date -d "$(jq -r ".data[${date[day_idx]}].timings.$1" "$prayers_json")" "+${2:-%I:%M}")"
+  fi
 }
 
 hijri() {
