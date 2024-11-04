@@ -67,37 +67,53 @@ fetch_mawaqit_prayers() {
     return 1
   fi
 
-  # Saving current Gregorian year in the JSON as Mawaqit does not provide it
-  conf_data=$(echo "$conf_data" | jq --arg year "${date[year]}" '. + {year: $year}')
   echo "$conf_data" > "$prayers_json"
 }
 
+add_calendar_info_to_json() {
+  # Save the current Gregorian date info in the JSON
+  jq --arg year "${date[year]}" --arg month "${date[month]}" \
+    '. + {localAppYear: $year, localAppMonth: $month}' \
+    "$prayers_json" > tmp.json && mv tmp.json "$prayers_json"
+
+  # Fetch the Hijri calendar data from the Aladhan API
+  # Documentation: https://aladhan.com/islamic-calendar-api#GetGToHCalendar
+  local api_url="http://api.aladhan.com/v1/gToHCalendar/${date[month]}/${date[year]}"
+  local response=$(curl -s "$api_url")
+
+  if [[ -z "$response" || "$(echo "$response" | jq -r '.code')" != "200" ]]; then
+    echo "Error: Failed to fetch Hijri calendar data from Aladhan API"
+    return 1
+  fi
+
+  local local_app_calendar=$(echo "$response" | jq '.data')
+  jq --argjson localAppCalendar "$local_app_calendar" \
+    '. + {localAppCalendar: $localAppCalendar}' "$prayers_json" > tmp.json && \
+    mv tmp.json "$prayers_json"
+}
+
 check() {
-  if [[ -n "$mawaqit_masjid_id" ]]; then
-    local available_year
-    if [[ -r $prayers_json ]]; then
-      available_year=$(jq -r ".year" "$prayers_json")
-    else
-      local fetch_prayers=1
-    fi
-
-    if [[ "$fetch_prayers" || "$available_year" != "${date[year]}" ]]; then
-      echo "-- Fetching current year prayer calendar (${date[year]})"
-      fetch_mawaqit_prayers "$mawaqit_masjid_id"
-    fi
+  if [[ -r $prayers_json ]]; then
+    local available_year=$(jq -r ".year" "$prayers_json")
+    local available_month=$(jq -r ".month" "$prayers_json")
   else
-    local available_month
-    if [[ -r $prayers_json ]]; then
-      available_month=$(jq -r ".data[0].date.gregorian.month.number" "$prayers_json")
-    else
-      local fetch_prayers=1
-    fi
+    local fetch_prayers=1
+  fi
 
+  if [[ -n "$mawaqit_masjid_id" && ("$fetch_prayers" || "$available_year" != "${date[year]}") ]]; then
+    echo "-- Fetching current year prayer calendar (${date[year]})"
+    fetch_mawaqit_prayers "$mawaqit_masjid_id"
+    add_calendar_info_to_json
+  else
     if [[ "$fetch_prayers" || "$available_month" != "${date[month]}" ]]; then
       echo "-- Fetching current month prayer calendar (${date[month]}-${date[year]})"
       # Documentation: https://aladhan.com/prayer-times-api#GetCalendar
       curl -Lso "$prayers_json" "https://api.aladhan.com/v1/calendar/${date[year]}/${date[month]}?latitude=$lat&longitude=$long&method=$method"
     fi
+  fi
+  # Update calendar info for both Aladhan and Mawaqit consumers if month has expired
+  if [[ "$available_month" != "${date[month]}" ]]; then
+      add_calendar_info_to_json
   fi
 }
 
@@ -155,23 +171,23 @@ hijri() {
   case "$1" in
   weekday)
     if [[ "$print_lang" == "ar" ]]; then
-      echo -n "$(jq -r ".data[${date[day_idx]}].date.hijri.weekday.ar" "$prayers_json")"
+      echo -n "$(jq -r ".localAppCalendar[${date[day_idx]}].hijri.weekday.ar" "$prayers_json")"
     else
-      echo -n "$(jq -r ".data[${date[day_idx]}].date.hijri.weekday.en" "$prayers_json")"
+      echo -n "$(jq -r ".localAppCalendar[${date[day_idx]}].hijri.weekday.en" "$prayers_json")"
     fi
     ;;
   day)
-    echo -n "$(jq -r ".data[${date[day_idx]}].date.hijri.day" "$prayers_json")"
+    echo -n "$(jq -r ".localAppCalendar[${date[day_idx]}].hijri.day" "$prayers_json")"
     ;;
   month)
     if [[ "$print_lang" == "ar" ]]; then
-      echo -n "$(jq -r ".data[${date[day_idx]}].date.hijri.month.ar" "$prayers_json")"
+      echo -n "$(jq -r ".localAppCalendar[${date[day_idx]}].hijri.month.ar" "$prayers_json")"
     else
-      echo -n "$(jq -r ".data[${date[day_idx]}].date.hijri.month.en" "$prayers_json")"
+      echo -n "$(jq -r ".localAppCalendar[${date[day_idx]}].hijri.month.en" "$prayers_json")"
     fi
     ;;
   year)
-    echo -n "$(jq -r ".data[${date[day_idx]}].date.hijri.year" "$prayers_json")"
+    echo -n "$(jq -r ".localAppCalendar[${date[day_idx]}].hijri.year" "$prayers_json")"
     ;;
   *)
     echo "unsupported argument: $1" && return 1
